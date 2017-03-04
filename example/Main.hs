@@ -4,10 +4,10 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-import qualified Control.Remote.Monad.Packet.Weak as WP
-import           Control.Remote.Monad.Binary
-import           Control.Remote.Monad.Packet (promote)
-import           Control.Remote.Monad
+import qualified Control.Remote.Packet.Weak as WP
+import           Control.Remote.Haxl.Binary
+import           Control.Remote.Packet (promote)
+import           Control.Remote.Haxl
 import           Control.Natural
 import qualified Data.ByteString.Lazy as BS
 import Network.Socket as Sock hiding (send)
@@ -24,38 +24,37 @@ import           Control.Exception
 import           Types
 -- =========== Server Code ==============
 --User function simulating a remote stack.
-dispatchWeakPacket :: (TMVar [Int])-> WP.WeakPacket Command Procedure a -> IO a
-dispatchWeakPacket var (WP.Command c@(Push n)) = do
+dispatchWeakPacket :: (TMVar [Int])-> WP.WeakPacket Query a -> IO a
+dispatchWeakPacket var (WP.Query c@(Push n)) = do
                                        putStrLn $ "Push "++ (show n)
                                        st <- atomically $ takeTMVar var
-                                       let (a,s) = runState (evalCommand c) st
+                                       let (a,s) = runState (evalQuery c) st
                                        print s
                                        atomically $ putTMVar var s
                                        return a
-dispatchWeakPacket var (WP.Procedure p) = do
+dispatchWeakPacket var (WP.Query p) = do
                                          putStrLn $ "Pop"
                                          st <- atomically $ takeTMVar var
-                                         let (a,s) = runState (evalProcedure p) st
+                                         let (a,s) = runState (evalQuery p) st
                                          print s
                                          atomically $ putTMVar var s
                                          return a
 
 
-evalProcedure :: Procedure a-> State [Int] a
-evalProcedure (Pop) = do st <- get
-                         case st of
-                           []  -> error "Can't pop an empty stack" --return $ Left "Can't pop an empty stack"
-                           (x:xs) -> do
-                                      put xs
-                                      return x
+evalQuery :: Query a-> State [Int] a
+evalQuery (Pop) = do st <- get
+                     case st of
+                       []  -> error "Can't pop an empty stack" --return $ Left "Can't pop an empty stack"
+                       (x:xs) -> do
+                                   put xs
+                                   return x
+evalQuery (Push n) = modify (n:)
 
-evalCommand :: Command -> State [Int] ()
-evalCommand (Push n) = modify (n:)
 
 
 --
 --Lift user function into a natural transformation
-runWeakBinary ::  TMVar [Int] -> WP.WeakPacket Command Procedure :~> IO
+runWeakBinary ::  TMVar [Int] -> WP.WeakPacket Query :~> IO
 runWeakBinary var =  wrapNT (dispatchWeakPacket var)
 
 socketServer ::String -> IO()
@@ -117,13 +116,13 @@ clientSend sock = return$ NT ( \ (Sync bs) ->
                      return res
               )
 -- Initializes socket and setup as sending method for RemoteMonad
-createSession :: String -> String -> IO (RemoteMonad Command Procedure :~> IO)
+createSession :: String -> String -> IO (RemoteHaxlMonad Query :~> IO)
 createSession host port =do
                sock <- createSocket host port
                (NT f) <- clientSend sock
                return $ monadClient f
 
-createSession2 :: IO (RemoteMonad Command Procedure :~> IO)
+createSession2 :: IO (RemoteHaxlMonad Query :~> IO)
 createSession2 = do
                    var <- newTMVarIO []
                    return $ monadClient (unwrapNT $ server $ promote (runWeakBinary var))
@@ -146,14 +145,13 @@ main2 ("client":_)= do
               _  -> do
                       s <-createSession "localhost" port
                       putStrLn " push 2; push 1;"
-                      send s $ do
+                      _ <- send s $ do
                                  push 2
                                  push 1
-
+                      putStrLn "push 9; pop:"
                       res <- send s $ do
                                  push 9
                                  pop
-                      putStrLn "push 9; pop:"
                       print res
                       res2 <- send s $ do add <$> pop <*> (pure 3)
                       putStrLn "add <$> pop <*> pure 3:"
@@ -175,3 +173,4 @@ main2 ("server":_) = do
           [] -> error "ERROR: Requires Port number as argument"
           _  -> socketServer  port
 
+main2 x = error "must be client or server"

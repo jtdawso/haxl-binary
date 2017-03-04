@@ -4,43 +4,33 @@
 {-# LANGUAGE TypeOperators #-}
 module Types where
  
-import           Control.Remote.Monad
-import           Control.Remote.Monad.Binary
+import           Control.Remote.Haxl
+import           Control.Remote.Haxl.Binary
 import           Data.Binary
+import           Debug.Trace
 
-{-
-import           Control.Remote.Monad.Transport
-import           Network.Transport  hiding (send)
-import           Network.Transport.TCP
--}
+data Query :: * -> * where
+  Pop  :: Query Int          -- POP
+  Push :: Int -> Query ()   -- PUSH
 
-
-data Command :: * where
-   Push :: Int -> Command   -- PUSH
- deriving (Show)
-
-instance Binary Command where
-   put (Push n) = put n
-   get = do i <- get
-            return $ Push i
-
-data Procedure :: * -> * where
-  Pop :: Procedure Int    -- POP
-
-instance BinaryQ Procedure where
+instance BinaryQ Query where
    getQ = do i <- get
              case i :: Word8 of
                0 -> return $ Fmap put Pop
+               1 -> do
+                     n <- get
+                     return $ Fmap put (Push n)
+               _ -> error "Unable to parse Query"
    putQ (Pop)= put (0 :: Word8) 
-
+   putQ (Push n) = do
+         put (1 :: Word8)
+         put n
+         
    interpQ (Pop) = get
+   interpQ (Push _n) =pure ()
 
+push :: Int -> RemoteHaxlMonad Query ()
+push n = query $ Push n
 
-
-
-
-push :: Int -> RemoteMonad Command Procedure ()
-push n = command $ Push n
-
-pop :: RemoteMonad Command Procedure Int
-pop = procedure $ Pop
+pop :: RemoteHaxlMonad Query Int
+pop = query $ Pop
